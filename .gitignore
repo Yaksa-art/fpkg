@@ -4,3 +4,4 @@ __pycache__/
 *.fpkg
 .DS_Store
 fpkg-build/target/
+fpkg-db/target/
