@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+import sys
+import os
+import argparse
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+from fpkg_lib import __version__
+from fpkg_lib.builder import Builder, PkgBuild, BuildError
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="fpkg-build",
+        description="fpkg-build — Build .fpkg packages from PKGBUILD.toml (M10 Builder)",
+    )
+    parser.add_argument("--version", action="version", version=f"fpkg-build {__version__}")
+    parser.add_argument(
+        "pkgbuild",
+        nargs="?",
+        default="PKGBUILD.toml",
+        help="Path to PKGBUILD.toml (default: ./PKGBUILD.toml)",
+    )
+    parser.add_argument(
+        "--output-dir", "-o",
+        default=".",
+        help="Directory for the output .fpkg (default: current directory)",
+    )
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Show build script output",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Parse and validate PKGBUILD.toml without building",
+    )
+
+    args = parser.parse_args()
+
+    if not Path(args.pkgbuild).exists():
+        print(f"[✗] Not found: {args.pkgbuild}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        pkgbuild = PkgBuild.from_file(args.pkgbuild)
+    except Exception as e:
+        print(f"[✗] Failed to parse {args.pkgbuild}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    errors = pkgbuild.validate()
+    if errors:
+        print("[✗] Validation errors:", file=sys.stderr)
+        for e in errors:
+            print(f"    - {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.dry_run:
+        print(f"[✓] {args.pkgbuild} is valid")
+        print(f"    Package : {pkgbuild.name} {pkgbuild.version}-{pkgbuild.release}")
+        print(f"    Arch    : {pkgbuild.arch}")
+        print(f"    Output  : {pkgbuild.output_filename()}")
+        print(f"    Requires: {', '.join(pkgbuild.runtime.requires) or 'none'}")
+        return
+
+    try:
+        builder = Builder(pkgbuild, output_dir=args.output_dir, verbose=args.verbose)
+        output = builder.build()
+        print(f"\n[✓] Done: {output}")
+    except BuildError as e:
+        print(f"[✗] Build failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"[✗] Unexpected error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+import sys
+import os
+import json
+import argparse
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+from fpkg_lib import __version__
+from fpkg_lib.package import FpkgReader, FpkgError
+from fpkg_lib.manifest import Manifest
+
+
+def cmd_info(args):
+    with FpkgReader(args.package) as pkg:
+        m = pkg.manifest()
+        p = m.package
+        d = m.dependencies
+
+        print(f"Name        : {p.name}")
+        print(f"Version     : {p.version}-{p.release}")
+        print(f"Arch        : {p.arch}")
+        print(f"Summary     : {p.summary}")
+        print(f"License     : {p.license}")
+        print(f"Maintainer  : {p.maintainer}")
+        print(f"Homepage    : {p.homepage}")
+        print(f"Build date  : {p.build_date}")
+        print(f"Install mode: {m.install.mode}")
+        print(f"Format ver  : {m.compat.fpkg_format}")
+
+        if p.description:
+            print(f"\nDescription :\n  {p.description.strip()}")
+
+        if d.requires:
+            print(f"\nRequires    : {', '.join(d.requires)}")
+        if d.suggests:
+            print(f"Suggests    : {', '.join(d.suggests)}")
+        if d.conflicts:
+            print(f"Conflicts   : {', '.join(d.conflicts)}")
+        if d.provides:
+            print(f"Provides    : {', '.join(d.provides)}")
+
+        print(f"\nOrigin      : {pkg.compat_origin()}")
+
+        v = m.verification
+        if v.manifest_hash:
+            print(f"Manifest    : {v.manifest_hash[:40]}...")
+        if v.content_tree:
+            print(f"Content tree: {v.content_tree[:40]}...")
+
+
+def cmd_verify(args):
+    with FpkgReader(args.package) as pkg:
+        ok, errors = pkg.verify()
+        if ok:
+            print(f"[✓] {args.package}: verification passed")
+        else:
+            print(f"[✗] {args.package}: verification FAILED")
+            for e in errors:
+                print(f"    - {e}")
+            sys.exit(1)
+
+
+def cmd_inspect(args):
+    with FpkgReader(args.package) as pkg:
+        names = pkg.names()
+        checksums = pkg.checksums()
+
+        print(f"Archive: {args.package}")
+        print(f"Files: {len(names)}\n")
+
+        sections = {"META": [], "DATA": [], "COMPAT": [], "OTHER": []}
+        for name in sorted(names):
+            if name.startswith("META/"):
+                sections["META"].append(name)
+            elif name.startswith("DATA/"):
+                sections["DATA"].append(name)
+            elif name.startswith("COMPAT/"):
+                sections["COMPAT"].append(name)
+            else:
+                sections["OTHER"].append(name)
+
+        for section, files in sections.items():
+            if not files:
+                continue
+            print(f"[{section}]")
+            for f in files:
+                h = checksums.get(f, "")
+                if h:
+                    short = h.split(":")[-1][:16]
+                    print(f"  {f}  ({h.split(':')[0]}:{short}...)")
+                else:
+                    print(f"  {f}")
+            print()
+
+
+def cmd_manifest(args):
+    with FpkgReader(args.package) as pkg:
+        raw = pkg.read("META/manifest.toml")
+        print(raw.decode())
+
+
+def cmd_extract(args):
+    dest = args.dest or f"./{Path(args.package).stem}"
+    with FpkgReader(args.package) as pkg:
+        ok, errors = pkg.verify()
+        if not ok and not args.force:
+            print(f"[✗] Verification failed. Use --force to extract anyway.")
+            for e in errors:
+                print(f"    - {e}")
+            sys.exit(1)
+        pkg.extract(dest, data_only=not args.full)
+    print(f"[✓] Extracted to: {dest}")
+
+
+def cmd_create(args):
+    from fpkg_lib.manifest import (
+        Manifest, ManifestPackage, ManifestVerification,
+        ManifestDependencies, ManifestInstall, ManifestRepository,
+        ManifestCompat,
+    )
+    from fpkg_lib.package import FpkgWriter
+
+    manifest = Manifest(
+        package=ManifestPackage(
+            name=args.name,
+            version=args.version,
+            arch=args.arch,
+            summary=args.summary or "",
+            license=args.license or "",
+        ),
+        dependencies=ManifestDependencies(
+            requires=args.requires or [],
+        ),
+        install=ManifestInstall(mode=args.mode or "both"),
+        repository=ManifestRepository(),
+        compat=ManifestCompat(),
+    )
+
+    output = args.output or f"{args.name}-{args.version}-1-{args.arch}.fpkg"
+    writer = FpkgWriter(output)
+    writer.set_manifest(manifest)
+
+    if args.data:
+        data_path = Path(args.data)
+        if data_path.is_dir():
+            writer.add_data_directory(str(data_path))
+        elif data_path.is_file():
+            writer.add_data_file(f"usr/bin/{data_path.name}", data_path.read_bytes())
+
+    writer.write()
+    print(f"[✓] Created: {output}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="fpkg",
+        description="fpkg — FSociety Package Manager",
+    )
+    parser.add_argument("--version", action="version", version=f"fpkg {__version__}")
+
+    sub = parser.add_subparsers(dest="command", metavar="command")
+    sub.required = True
+
+    p_info = sub.add_parser("info", help="Show package metadata")
+    p_info.add_argument("package", help="Path to .fpkg file")
+    p_info.set_defaults(func=cmd_info)
+
+    p_verify = sub.add_parser("verify", help="Verify package checksums")
+    p_verify.add_argument("package", help="Path to .fpkg file")
+    p_verify.set_defaults(func=cmd_verify)
+
+    p_inspect = sub.add_parser("inspect", help="List archive contents")
+    p_inspect.add_argument("package", help="Path to .fpkg file")
+    p_inspect.set_defaults(func=cmd_inspect)
+
+    p_manifest = sub.add_parser("manifest", help="Print raw manifest.toml")
+    p_manifest.add_argument("package", help="Path to .fpkg file")
+    p_manifest.set_defaults(func=cmd_manifest)
+
+    p_extract = sub.add_parser("extract", help="Extract package contents")
+    p_extract.add_argument("package", help="Path to .fpkg file")
+    p_extract.add_argument("--dest", help="Destination directory")
+    p_extract.add_argument("--full", action="store_true", help="Extract META/ and COMPAT/ too")
+    p_extract.add_argument("--force", action="store_true", help="Extract even if verification fails")
+    p_extract.set_defaults(func=cmd_extract)
+
+    p_create = sub.add_parser("create", help="Create a .fpkg package from directory")
+    p_create.add_argument("--name", required=True, help="Package name")
+    p_create.add_argument("--version", required=True, help="Package version")
+    p_create.add_argument("--arch", default="x86_64", help="Architecture (default: x86_64)")
+    p_create.add_argument("--summary", help="One-line description")
+    p_create.add_argument("--license", help="License identifier")
+    p_create.add_argument("--requires", nargs="*", help="Runtime dependencies")
+    p_create.add_argument("--mode", choices=["system", "user", "both"], default="both")
+    p_create.add_argument("--data", help="Directory or file to include in DATA/")
+    p_create.add_argument("--output", help="Output .fpkg path")
+    p_create.set_defaults(func=cmd_create)
+
+    args = parser.parse_args()
+    try:
+        args.func(args)
+    except FpkgError as e:
+        print(f"[✗] {e}", file=sys.stderr)
+        sys.exit(1)
+    except FileNotFoundError as e:
+        print(f"[✗] File not found: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"[✗] Unexpected error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

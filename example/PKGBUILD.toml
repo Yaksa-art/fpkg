@@ -1,0 +1,34 @@
+[package]
+name        = "hello-world"
+version     = "1.0.0"
+release     = 1
+arch        = "x86_64"
+license     = "MIT"
+summary     = "A minimal hello-world package"
+description = "Demonstrates the .fpkg build format."
+homepage    = "https://github.com/Yaksa-art/fpkg"
+maintainer  = "Yaksa-art <vsdurkov@gmail.com>"
+categories  = ["misc"]
+tags        = ["example", "hello"]
+
+[source]
+
+[build]
+build_depends = []
+script = """
+mkdir -p "$FPM_DESTDIR/usr/bin"
+printf '#!/bin/sh\necho "Hello from fpkg!"\n' > "$FPM_DESTDIR/usr/bin/hello-world"
+chmod +x "$FPM_DESTDIR/usr/bin/hello-world"
+"""
+
+[package_install]
+mode = "both"
+script = ""
+config_files = []
+desktop_files = []
+
+[runtime]
+requires  = []
+suggests  = []
+conflicts = []
+provides  = ["hello-world"]
