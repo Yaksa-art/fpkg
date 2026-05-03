@@ -4,6 +4,27 @@ All notable changes to fpkg will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.1.1] - 2026-05-03 15:35:00
+
+[refactor] Rewrite M10 Builder in Rust; replace Python fpkg-build with native binary
+
+### Changed
+
+#### fpkg-build/ (Rust crate)
+
+- Rewrite M10 Builder as a Rust binary crate (`fpkg-build/`)
+- `src/main.rs`: CLI entry point via `clap` — `--dry-run`, `--output-dir`, `--verbose`
+- `src/pkgbuild.rs`: typed `PKGBUILD.toml` parser via `serde` + `toml`
+- `src/manifest.rs`: `Manifest` struct and TOML serialization via `serde`
+- `src/package.rs`: `FpkgWriter` — writes ZIP-based `.fpkg` archive with `META/`, `DATA/`, `COMPAT/` layout; BLAKE3 checksums per file; Merkle root over `DATA/`
+- `src/builder.rs`: `Builder` — full build pipeline: source prep, shell script execution via `/bin/sh -e`, `destdir` staging, checksum computation, archive assembly
+- `src/checksums.rs`: BLAKE3 hashing helpers for bytes and files
+
+#### root
+
+- Remove `fpkg-build` (Python script) — replaced by the Rust binary
+- Add `CONTRIBUTING.md`: commit conventions and changelog rules
+
 ## [0.1.0] - 2026-05-03 15:30:00
 
 [feat] Implement M10 Builder and fpkg core — manifest spec, .fpkg format, CLI tooling

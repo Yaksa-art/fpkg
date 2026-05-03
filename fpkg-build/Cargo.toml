@@ -1,0 +1,21 @@
+[package]
+name = "fpkg-build"
+version = "0.1.1"
+edition = "2021"
+description = "M10 Builder — build .fpkg packages from PKGBUILD.toml"
+license = "Apache-2.0"
+
+[[bin]]
+name = "fpkg-build"
+path = "src/main.rs"
+
+[dependencies]
+anyhow   = "=1.0.75"
+blake3   = "=1.5.0"
+chrono   = { version = "=0.4.31", features = ["clock"] }
+clap     = { version = "=4.4.6", features = ["derive"] }
+serde    = { version = "=1.0.189", features = ["derive"] }
+tempfile = "=3.8.0"
+toml     = "=0.7.8"
+walkdir  = "=2.4.0"
+zip      = { version = "=0.6.6", default-features = false, features = ["deflate"] }
