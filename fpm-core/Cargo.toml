@@ -1,0 +1,31 @@
+[package]
+name = "fpm-core"
+version = "0.1.0"
+edition = "2021"
+description = "fpm core: M4 Transaction Manager + shared primitives"
+
+[lib]
+name = "fpm_core"
+path = "src/lib.rs"
+
+[dependencies]
+# M1 types (ResolvedPackage, Version)
+fpm-solver = { path = "../fpm-solver" }
+# M2 types (FetchResult)
+fpm-fetcher = { path = "../fpm-fetcher" }
+
+serde        = { version = "1", features = ["derive"] }
+serde_json   = "1"
+toml         = "0.8"
+thiserror    = "1"
+anyhow       = "1"
+uuid         = { version = "1", features = ["v4"] }
+chrono       = { version = "0.4", features = ["serde"] }
+tracing      = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+blake3       = "1"
+hex          = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
+tokio    = { version = "1", features = ["full"] }
