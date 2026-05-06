@@ -16,11 +16,11 @@ fpm install firefox
   M3 fpm-verifier   ── Ed25519 + BLAKE3 Merkle + checksums + PKI chain (C++20 via FFI)
        │  returns Vec<FetchResult> with verified paths
        ▼
-  M4 Transaction    ── (planned) Atomic generation snapshot
+  M4 fpm-core/trx   ── Atomic generation snapshot (CoW), rollback
        ▼
-  M5 Installer      ── (planned) Unpack DATA/, run scripts, layout files
+  M5 fpm-installer  ── (planned) Unpack DATA/, run scripts, layout files
        ▼
-  M8 Database       ── (planned) SQLite record of installed packages
+  M8 fpm-db         ── (planned) SQLite record of installed packages
 ```
 
 ## Module Status
@@ -30,7 +30,7 @@ fpm install firefox
 | **M1 fpm-solver** | Rust | ✅ implemented | Dependency resolution, conflict reporting, virtual-package aliases |
 | **M2 fpm-fetcher** | Rust | ✅ implemented | Async download, parallel, HTTP Range resume, mirror failover, M3 FFI call |
 | **M3 fpm-verifier** | C++20 | ✅ implemented | Ed25519, BLAKE3 Merkle tree, per-file checksums, PKI chain |
-| **M4 fpm-core (trx)** | Rust | planned | Atomic CoW overlay, generation/rollback |
+| **M4 fpm-core (trx)** | Rust | ✅ implemented | Atomic CoW generation snapshot, rollback, install plan |
 | **M5 fpm-installer** | Rust | planned | File layout, ldconfig, desktop entries, M8 record |
 | **M6 fpm-index** | Rust | planned | Repo index sync (delta, ETag, MessagePack) |
 | **M7 fpm-hooks** | Rust/Shell | planned | Pre/post-install script runner, sandboxed via bwrap |
@@ -88,7 +88,7 @@ fpm-solver check   --manifest ./manifest.toml
 
 ## M2 — Fetcher (`fpm-fetcher/`)
 
-Rust async library + CLI. Receives `Vec<ResolvedPackage>` from M1, downloads `.fpkg` files from configured mirrors in parallel, then calls **M3 Verifier via C FFI** on each downloaded archive before returning paths to the caller (M4/M5).
+Rust async library + CLI. Receives `Vec<ResolvedPackage>` from M1, downloads `.fpkg` files from configured mirrors in parallel, then calls **M3 Verifier via C FFI** on each downloaded archive before returning paths to the caller (M4).
 
 ### Features
 
@@ -131,20 +131,6 @@ Progress events are printed as JSON lines:
 {"type":"downloaded","package":"firefox"}
 {"type":"verified","package":"firefox","ok":true,"reason":null}
 {"type":"done","package":"firefox","path":"/var/cache/fpm/firefox-125.0.3.fpkg"}
-```
-
-### Integration with M1 and M3
-
-```rust
-// In fpmd or fpm CLI:
-use fpm_solver::{resolve, ResolvedPackage};
-use fpm_fetcher::{fetch_packages, FetcherConfig, progress::progress_channel};
-
-let resolved: Vec<ResolvedPackage> = resolve(&manifest, &index)?;
-let (tx, rx) = progress_channel(64);
-let results = fetch_packages(&resolved, &config, &pubkey_path, Some(tx)).await;
-// results: Vec<Result<FetchResult, FetchError>>
-// Each FetchResult.path is a verified .fpkg ready for M5 Installer
 ```
 
 ---
@@ -197,6 +183,76 @@ fpm-verifier hash     <file>                          # BLAKE3 of any file
 
 ---
 
+## M4 — Transaction Manager (`fpm-core/`)
+
+Rust library. Receives `Vec<FetchResult>` from M2 and `Vec<ResolvedPackage>` from M1, builds an `InstallPlan`, then manages **atomic generation snapshots** so every install, remove, or upgrade can be rolled back without data loss.
+
+### Generation model
+
+Every operation (install / remove / upgrade / rollback) creates a new numbered **generation**. The `current` symlink always points to the active generation. Rolling back simply creates a new generation record pointing at a past state and moves the symlink atomically.
+
+```
+/var/lib/fpm/
+├── generations/
+│   ├── 1/  meta.json  root/   ← initial install
+│   ├── 2/  meta.json  root/   ← installed firefox
+│   └── 3/  meta.json  root/   ← rollback to 1
+├── current -> 3               ← symlink, updated atomically
+├── pending/                   ← staging area (exists only during active trx)
+│   └── root/                  ← M5 Installer writes files here
+└── db.sqlite                  ← M8 Database
+```
+
+### Transaction lifecycle
+
+```
+TransactionManager::begin(description)
+       │  creates pending/, returns Transaction handle
+       ▼
+trx.set_plan(InstallPlan)   ← built from M1 + M2 results
+       │
+       ▼  M5 Installer (upcoming) writes files into trx.root_dir()
+       │
+trx.commit()  ── atomic rename pending/ → generations/<id>/
+               ── update current symlink
+               ── write meta.json with package list + BLAKE3 hashes
+       OR
+trx.abort()   ── remove pending/ entirely
+```
+
+### API
+
+```rust
+use fpm_core::{TransactionManager, InstallPlan, FpmPaths};
+
+let mgr = TransactionManager::new_system();    // /var/lib/fpm
+let mut trx = mgr.begin("install firefox 125.0.3")?;
+
+let plan = InstallPlan::from_resolved(&resolved, &fetch_results, &installed, "install firefox");
+trx.set_plan(plan);
+
+// M5 Installer would now unpack files into trx.root_dir()
+
+let gen_id = trx.commit()?;   // → 2
+
+// Later:
+mgr.rollback(1)?;              // creates gen 3, moves current → 3
+mgr.prune(10)?;                // remove old generations, keep 10 most recent
+```
+
+### InstallPlan
+
+`InstallPlan::from_resolved()` takes M1 + M2 output and the currently installed package map, and classifies each package as `Install` / `Upgrade { from_version }` / `AlreadyInstalled`. Only actionable entries (not `AlreadyInstalled`) are processed by M5.
+
+### Build & test
+
+```sh
+# Requires M1 and M2 already built
+cd fpm-core && cargo test
+```
+
+---
+
 ## fpkg — Package Inspector CLI
 
 Python 3.11+ tool for inspecting, verifying, and creating `.fpkg` files.
@@ -230,18 +286,28 @@ fpkg/
 │   ├── vendor/blake3/
 │   ├── CMakeLists.txt
 │   └── BUILD.md
-└── fpm-fetcher/           # M2 — Rust async, package downloader
+├── fpm-fetcher/           # M2 — Rust async, package downloader
+│   ├── src/
+│   │   ├── lib.rs             # public API, re-exports solver types
+│   │   ├── config.rs          # FetcherConfig (loads fpm.conf)
+│   │   ├── mirror.rs          # Mirror, probe_mirrors, rank_mirrors
+│   │   ├── cache.rs           # PackageCache (.fpkg + .part + .etag)
+│   │   ├── download.rs        # fetch_packages(), fetch_one(), extract_fpkg()
+│   │   ├── progress.rs        # ProgressEvent, mpsc channel
+│   │   ├── verifier_ffi.rs    # extern "C" bindings to libfpm_verifier.a
+│   │   └── main.rs            # CLI: fetch / probe-mirrors
+│   ├── tests/download_tests.rs
+│   ├── build.rs               # links libfpm_verifier.a + libsodium
+│   └── Cargo.toml
+└── fpm-core/              # M4 — Rust, transaction manager
     ├── src/
-    │   ├── lib.rs             # public API, re-exports solver types
-    │   ├── config.rs          # FetcherConfig (loads fpm.conf)
-    │   ├── mirror.rs          # Mirror, probe_mirrors, rank_mirrors
-    │   ├── cache.rs           # PackageCache (.fpkg + .part + .etag)
-    │   ├── download.rs        # fetch_packages(), fetch_one(), extract_fpkg()
-    │   ├── progress.rs        # ProgressEvent, mpsc channel
-    │   ├── verifier_ffi.rs    # extern "C" bindings to libfpm_verifier.a
-    │   └── main.rs            # CLI: fetch / probe-mirrors
-    ├── tests/download_tests.rs
-    ├── build.rs               # links libfpm_verifier.a + libsodium
+    │   ├── lib.rs             # re-exports all public types
+    │   ├── error.rs           # TrxError enum
+    │   ├── paths.rs           # FpmPaths (system / user mode)
+    │   ├── generation.rs      # Generation, GenerationMeta, list/load/save/prune
+    │   ├── plan.rs            # InstallPlan, PlanEntry, PlanOp
+    │   └── trx.rs             # Transaction, TransactionManager
+    ├── tests/trx_tests.rs     # 8 integration tests
     └── Cargo.toml
 ```
 
@@ -253,12 +319,18 @@ cd fpm-verifier
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 
-# 2. M1 Solver + M2 Fetcher (Rust) — fetcher links against libfpm_verifier.a
-cd ../fpm-solver  && cargo build --release
+# 2. M1 Solver (Rust)
+cd ../fpm-solver && cargo build --release
+
+# 3. M2 Fetcher (Rust) — links against libfpm_verifier.a
 cd ../fpm-fetcher && cargo build --release
 
-# 3. Tests
+# 4. M4 Transaction Manager (Rust)
+cd ../fpm-core && cargo build --release
+
+# 5. Tests
 cd ../fpm-verifier && ctest --test-dir build --output-on-failure
 cd ../fpm-solver   && cargo test
 cd ../fpm-fetcher  && cargo test
+cd ../fpm-core     && cargo test
 ```
