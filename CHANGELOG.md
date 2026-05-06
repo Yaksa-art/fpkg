@@ -4,6 +4,23 @@ All notable changes to fpkg will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.1.3] - 2026-05-06 19:30:00
+
+[feat] Implement M1 Dependency Solver — PubGrub-based dependency resolution with virtual packages and conflict detection
+
+### Added
+
+#### fpm-solver/ (Rust crate)
+
+- Add `fpm-solver/Cargo.toml`: library + binary crate, depends on `pubgrub` (PubGrub algorithm), `serde`, `clap`, `toml`, `anyhow`
+- Add `src/types.rs`: `Package`, `Version`, `VersionReq`, `Op`, `Dep` — typed primitives with manual semver parsing and comparison; `VersionReq::matches` for constraint evaluation
+- Add `src/manifest.rs`: `Manifest` parser for `manifest.toml` — reads `[package]`, `[dependencies.requires]`, `provides`, `conflicts`; supports both simple string deps and full `{name, version, optional, reason}` form
+- Add `src/index.rs`: `PackageIndex` — in-memory package registry; `add`, `versions_of`, `get`, `providers_of`, `resolve_name` (resolves virtual package names to real providers via `provides`), `satisfying_versions`, `has_conflict`
+- Add `src/solver.rs`: `resolve(index, root, version) -> Resolution` — wraps the `pubgrub` crate's `DependencyProvider` trait; maps `VersionReq` constraints to `Range<SemVerVersion>`; skips optional deps from resolution; inserts conflict ranges as `Range::empty()`; returns `HashMap<String, Version>` on success or a human-readable conflict report on failure
+- Add `src/lib.rs`: public library re-exports — `PackageIndex`, `resolve`, `Resolution`, `Dep`, `Package`, `VersionReq`
+- Add `src/main.rs`: `fpm-solver` CLI — `resolve --manifest <path> --index <dir>` (loads all `.toml` files from the index dir, runs resolution, prints sorted package list); `check --manifest <path>` (parses and pretty-prints deps, provides, conflicts without resolution)
+- Add `src/tests.rs`: unit tests — `test_simple_dep_resolution`, `test_transitive_deps`, `test_version_conflict_detection`, `test_provides_virtual_package`, `test_optional_deps_excluded`, `test_conflict_error_message`
+
 ## [0.1.2] - 2026-05-03 15:40:00
 
 [feat] Implement M8 Local Database — SQLite-backed package tracking with generations and rollback
