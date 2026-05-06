@@ -4,6 +4,24 @@ All notable changes to fpkg will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.1.4] - 2026-05-06 19:30:00
+
+[feat] Implement M2 Fetcher — async parallel downloader with resume, BLAKE3 verify, and file cache
+
+### Added
+
+#### fpm-fetcher/ (Rust crate)
+
+- Add `fpm-fetcher/Cargo.toml`: library + binary crate; depends on `reqwest` (rustls-tls, stream), `tokio` (rt-multi-thread, fs, io-util), `blake3`, `futures`, `serde`, `clap`, `anyhow`
+- Add `src/types.rs`: `PackageUrl` — package download descriptor with `name`, `version`, `urls` (mirror list), `blake3` (optional expected hash), `size`; `FetchError` — typed errors for hash mismatch, download failure, I/O, and no-mirrors cases
+- Add `src/cache.rs`: `Cache` — local package cache handle; `system()` (`/var/cache/fpm`), `user()` (`~/.cache/fpm`), `from_env(user_mode)` with `FPM_CACHE` override; `contains`, `path_for`, `partial_path_for`, `ensure_dir`, `remove`, `commit_partial` (atomic rename of `.part` → `.fpkg`)
+- Add `src/mirror.rs`: `Mirror` struct with URL and priority; `probe_mirrors(mirrors, timeout)` — async HEAD probe of all mirrors, returns list sorted by response latency, drops unreachable mirrors
+- Add `src/progress.rs`: `Progress` — lock-free byte counter via `Arc<AtomicU64>`; `add(bytes)`, `downloaded_bytes()`, `total_bytes()`, `fraction()` for progress reporting
+- Add `src/fetcher.rs`: `fetch_one(FetchRequest) -> FetchResult` — checks cache first (with hash verify on hit), then downloads from mirror list in order with HTTP Range resume; streams response body in chunks, updating `Progress`; verifies BLAKE3 on completion; removes corrupt partial on mismatch; `fetch_all(Vec<FetchRequest>)` — spawns each `fetch_one` as an independent `tokio::task`, collects results
+- Add `src/lib.rs`: public re-exports — `Cache`, `fetch_all`, `fetch_one`, `FetchRequest`, `FetchResult`, `probe_mirrors`, `Mirror`, `FetchError`
+- Add `src/main.rs`: `fpm-fetcher` CLI — `download --name --version --url [..] --blake3 --parallel`; `probe <mirrors..>`; `cached --name --version`; `purge --name --version`; `--user` flag for user-mode cache
+- Add `src/tests.rs`: unit/async tests — `test_cache_hit_skips_download`, `test_hash_mismatch_rejected`, `test_no_urls_returns_error`, `test_progress_tracks_bytes`, `test_cache_key_format`
+
 ## [0.1.3] - 2026-05-06 19:30:00
 
 [feat] Implement M1 Dependency Solver — PubGrub-based dependency resolution with virtual packages and conflict detection
@@ -16,9 +34,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Add `src/types.rs`: `Package`, `Version`, `VersionReq`, `Op`, `Dep` — typed primitives with manual semver parsing and comparison; `VersionReq::matches` for constraint evaluation
 - Add `src/manifest.rs`: `Manifest` parser for `manifest.toml` — reads `[package]`, `[dependencies.requires]`, `provides`, `conflicts`; supports both simple string deps and full `{name, version, optional, reason}` form
 - Add `src/index.rs`: `PackageIndex` — in-memory package registry; `add`, `versions_of`, `get`, `providers_of`, `resolve_name` (resolves virtual package names to real providers via `provides`), `satisfying_versions`, `has_conflict`
-- Add `src/solver.rs`: `resolve(index, root, version) -> Resolution` — wraps the `pubgrub` crate's `DependencyProvider` trait; maps `VersionReq` constraints to `Range<SemVerVersion>`; skips optional deps from resolution; inserts conflict ranges as `Range::empty()`; returns `HashMap<String, Version>` on success or a human-readable conflict report on failure
+- Add `src/solver.rs`: `resolve(index, root, version) -> Resolution` — wraps the `pubgrub` crate’s `DependencyProvider` trait; maps `VersionReq` constraints to `Range<SemVerVersion>`; skips optional deps from resolution; inserts conflict ranges as `Range::empty()`; returns `HashMap<String, Version>` on success or a human-readable conflict report on failure
 - Add `src/lib.rs`: public library re-exports — `PackageIndex`, `resolve`, `Resolution`, `Dep`, `Package`, `VersionReq`
-- Add `src/main.rs`: `fpm-solver` CLI — `resolve --manifest <path> --index <dir>` (loads all `.toml` files from the index dir, runs resolution, prints sorted package list); `check --manifest <path>` (parses and pretty-prints deps, provides, conflicts without resolution)
+- Add `src/main.rs`: `fpm-solver` CLI — `resolve --manifest <path> --index <dir>`; `check --manifest <path>`
 - Add `src/tests.rs`: unit tests — `test_simple_dep_resolution`, `test_transitive_deps`, `test_version_conflict_detection`, `test_provides_virtual_package`, `test_optional_deps_excluded`, `test_conflict_error_message`
 
 ## [0.1.2] - 2026-05-03 15:40:00
