@@ -1,21 +1,159 @@
-# fpkg
+# fpkg — FSociety Package Manager
 
-FSociety Package Manager — native package format and build tooling for FSocietyOS.
+Native package format, cryptographic verification, dependency resolution and build tooling for FSocietyOS.
 
-## Requirements
+## Architecture
 
-- Python 3.11+
-- `blake3` — `pip install blake3`
-- `tomli-w` — `pip install tomli-w`
+The package manager is split into focused modules. Each module is an independent crate / library that is linked or called via a defined interface.
 
-## Tools
+| Module | Language | Status | Responsibility |
+|--------|----------|--------|----------------|
+| **M1 fpm-solver** | Rust | ✅ implemented | Dependency resolution (pubgrub SAT solver), conflict reporting, virtual-package aliases |
+| **M3 fpm-verifier** | C++20 | ✅ implemented | Ed25519 signature verification, BLAKE3 Merkle tree, per-file checksums, PKI chain |
+| **M8 fpm-db** | — | planned | Installed-package database |
+| **M10 fpm-builder** | — | planned | Build packages from PKGBUILD.toml |
+| **M2 fpm-fetcher** | Rust | planned | Download packages & signatures from repo mirrors |
+| **M5 fpm-installer** | Rust | planned | Unpack, run scripts, record in M8 DB |
 
-| Tool | Purpose |
-|---|---|
-| `fpkg` | Inspect, verify, and extract `.fpkg` archives |
-| `fpkg-build` | Build `.fpkg` packages from `PKGBUILD.toml` |
+The `fpkg` Python CLI (root of this repo) provides package inspection, verification, and creation for the `.fpkg` archive format.
 
-## fpkg — Package Inspector
+---
+
+## .fpkg Archive Format
+
+A `.fpkg` file is a zstd-compressed TAR archive with the following layout:
+
+```
+package.fpkg  (tar.zst)
+├── META/
+│   ├── manifest.toml       # Package metadata and dependency declarations
+│   ├── checksums.blake3    # "<blake3-hex>  <relative-path>" for every DATA/ file
+│   ├── content_tree.txt    # Single line: BLAKE3 Merkle root of DATA/
+│   ├── signature.ed25519   # Ed25519 detached signature over manifest.toml (64 bytes raw)
+│   └── scripts/
+│       ├── pre-install.sh
+│       └── post-install.sh
+└── DATA/                   # Installed files (mirrors filesystem root)
+    └── usr/
+        └── ...
+```
+
+---
+
+## M1 — Dependency Solver (`fpm-solver/`)
+
+Rust library + CLI that resolves the full install set for a package given a local package index.
+
+### Features
+
+- Parses `manifest.toml` — reads `[dependencies.requires]` in both string (`"libfoo >= 1.2.0"`) and table form
+- Supports `provides` virtual names (e.g. `libc` resolved to `glibc` or `musl`)
+- `conflicts` declarations cause the solver to produce a clear error
+- Optional dependencies are excluded from resolution unless explicitly requested
+- Human-readable conflict reports via `pubgrub`
+
+### Build
+
+```sh
+cd fpm-solver
+cargo build --release
+```
+
+### Usage
+
+```sh
+# Resolve all dependencies for a package
+fpm-solver resolve --manifest ./path/to/manifest.toml --index ./repo/index
+
+# Validate that a manifest.toml is well-formed
+fpm-solver check --manifest ./path/to/manifest.toml
+```
+
+---
+
+## M3 — Verifier (`fpm-verifier/`)
+
+C++20 static library + CLI that cryptographically verifies a `.fpkg` before installation.
+
+### Verification pipeline
+
+1. **Ed25519** — signature over `META/manifest.toml` checked against package public key
+2. **Per-file checksums** — every file in `DATA/` verified against `META/checksums.blake3`
+3. **Merkle root** — BLAKE3 Merkle tree rebuilt from `DATA/` and compared to `META/content_tree.txt`
+4. **PKI chain** (optional) — package public key verified against repo root key via `chain_sig`
+
+### Dependencies
+
+- CMake 3.20+, GCC 12+ / Clang 15+ with C++20
+- `libsodium` (`libsodium-dev`)
+- BLAKE3 C sources vendored in `vendor/blake3/` (see `BUILD.md`)
+
+### Build
+
+```sh
+cd fpm-verifier
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+```
+
+Outputs:
+- `build/libfpm_verifier.a` — static library for FFI
+- `build/fpm-verifier` — CLI binary
+
+### CLI usage
+
+```sh
+# Verify a fully extracted .fpkg directory
+fpm-verifier package  <extracted-dir>  <pubkey>
+
+# Recompute and compare Merkle root
+fpm-verifier merkle   <data-dir>  <expected-root-hex>
+
+# Verify per-file checksums
+fpm-verifier checksum <data-dir>  <checksums.blake3>
+
+# Verify PKI chain (repo root signed package pubkey)
+fpm-verifier pki      <root-pubkey>  <pkg-pubkey>  <chain-sig>
+
+# Print BLAKE3 hash of any file
+fpm-verifier hash     <file>
+```
+
+### FFI from Rust
+
+The C API is declared in `include/fpm_verifier.h`. Link from Rust via `build.rs`:
+
+```rust
+println!("cargo:rustc-link-lib=static=fpm_verifier");
+println!("cargo:rustc-link-search=native=../fpm-verifier/build");
+println!("cargo:rustc-link-lib=sodium");
+```
+
+Error codes returned from all `fpm_verify_*` functions:
+
+| Code | Constant | Meaning |
+|------|----------|---------|
+| 0 | `FPM_OK` | Success |
+| 1 | `FPM_ERR_SIGNATURE` | Ed25519 verification failed |
+| 2 | `FPM_ERR_MERKLE` | Merkle root mismatch |
+| 3 | `FPM_ERR_CHECKSUM` | Per-file checksum mismatch |
+| 4 | `FPM_ERR_PKI` | PKI chain verification failed |
+| 5 | `FPM_ERR_IO` | File I/O error |
+| 6 | `FPM_ERR_INVALID_INPUT` | Bad key/signature length |
+
+---
+
+## fpkg — Package Inspector CLI
+
+Python 3.11+ tool for inspecting, verifying, and creating `.fpkg` files.
+
+### Requirements
+
+```sh
+pip install blake3 tomli-w
+```
+
+### Commands
 
 ```sh
 # Show package metadata
@@ -37,127 +175,37 @@ FSociety Package Manager — native package format and build tooling for FSociet
 ./fpkg create --name myapp --version 1.0.0 --data ./dist --output myapp.fpkg
 ```
 
-## fpkg-build — Package Builder (M10)
+---
 
-Create a `PKGBUILD.toml` in your project directory:
-
-```toml
-[package]
-name        = "my-tool"
-version     = "1.0.0"
-release     = 1
-arch        = "x86_64"
-license     = "MIT"
-summary     = "My amazing tool"
-maintainer  = "Your Name <email@example.com>"
-
-[source]
-local = "./src"
-
-[build]
-build_depends = ["gcc", "make"]
-script = """
-make PREFIX=/usr
-"""
-
-[package_install]
-mode   = "both"
-script = """
-make PREFIX=/usr DESTDIR="$FPM_DESTDIR" install
-"""
-
-[runtime]
-requires = ["glibc >=2.35"]
-```
-
-Then build:
-
-```sh
-./fpkg-build PKGBUILD.toml
-# [*] Building my-tool 1.0.0-1 (x86_64)
-# [✓] Source: ./src
-# [✓] Build complete
-# [✓] Install script complete
-# [*] Packing N file(s)...
-# [✓] Package created: my-tool-1.0.0-1-x86_64.fpkg
-
-# Validate without building
-./fpkg-build PKGBUILD.toml --dry-run
-
-# Custom output directory
-./fpkg-build PKGBUILD.toml --output-dir ./dist
-```
-
-### Build environment variables
-
-| Variable | Value |
-|---|---|
-| `FPM_SRCDIR` | Directory where sources are placed |
-| `FPM_DESTDIR` | Staging directory — install files here |
-| `FPM_NAME` | Package name |
-| `FPM_VERSION` | Package version |
-| `FPM_ARCH` | Target architecture |
-
-## .fpkg Format
-
-`.fpkg` is a ZIP archive with the following structure:
+## Repository layout
 
 ```
-package.fpkg
-├── META/
-│   ├── manifest.toml        # Package metadata (name, version, deps, checksums)
-│   ├── checksums.blake3     # BLAKE3 hash of every file in DATA/
-│   ├── dependencies.toml    # Dependency graph
-│   ├── changelog.md         # Version history
-│   └── scripts/
-│       ├── pre-install.sh
-│       ├── post-install.sh
-│       ├── pre-remove.sh
-│       └── post-remove.sh
-├── DATA/
-│   └── usr/
-│       ├── bin/
-│       ├── lib/
-│       └── share/
-└── COMPAT/
-    └── origin_format.txt    # "native" | "deb" | "rpm" | "apk" | ...
-```
-
-### manifest.toml fields
-
-| Section | Key | Description |
-|---|---|---|
-| `[package]` | `name` | Package identifier |
-| `[package]` | `version` | Semantic version |
-| `[package]` | `release` | Build number |
-| `[package]` | `arch` | `x86_64` / `aarch64` / `riscv64` / `any` |
-| `[package]` | `license` | SPDX license identifier |
-| `[package]` | `summary` | One-line description |
-| `[package]` | `maintainer` | `Name <email>` |
-| `[package.size]` | `installed` | Bytes on disk after install |
-| `[package.size]` | `compressed` | Bytes in archive |
-| `[package.flags]` | `has_services` | Contains systemd units |
-| `[package.flags]` | `has_suid` | Contains SUID/SGID files |
-| `[verification]` | `manifest_hash` | BLAKE3 hash of this manifest |
-| `[verification]` | `content_tree` | BLAKE3 Merkle root of DATA/ |
-| `[verification]` | `signature_algo` | `ed25519` |
-| `[dependencies]` | `requires` | Runtime requirements |
-| `[dependencies]` | `suggests` | Optional enhancements |
-| `[dependencies]` | `conflicts` | Incompatible packages |
-| `[dependencies]` | `provides` | Virtual package names |
-| `[install]` | `mode` | `system` / `user` / `both` |
-| `[install]` | `config_files` | Paths that survive upgrades |
-| `[compat]` | `min_fpm_version` | Minimum fpkg version required |
-
-## Example
-
-```sh
-# Build the included example
-cd example
-../fpkg-build PKGBUILD.toml
-
-# Inspect it
-../fpkg info hello-world-1.0.0-1-x86_64.fpkg
-../fpkg verify hello-world-1.0.0-1-x86_64.fpkg
-../fpkg inspect hello-world-1.0.0-1-x86_64.fpkg
+fpkg/
+├── fpkg               # Python package inspector CLI
+├── fpkg-build         # Python package builder
+├── fpm-solver/        # M1 — Rust dependency solver
+│   ├── src/
+│   │   ├── types.rs   # Version, VersionReq, Dep primitives
+│   │   ├── manifest.rs
+│   │   ├── index.rs
+│   │   ├── solver.rs  # pubgrub integration
+│   │   └── main.rs
+│   └── Cargo.toml
+└── fpm-verifier/      # M3 — C++20 cryptographic verifier
+    ├── include/
+    │   ├── fpm_verifier.h    # C API for FFI
+    │   └── fpm_verifier.hpp  # C++ API
+    ├── src/
+    │   ├── blake3_hasher.cpp
+    │   ├── merkle.cpp
+    │   ├── ed25519.cpp
+    │   ├── checksum_file.cpp
+    │   ├── pki.cpp
+    │   ├── verifier.cpp
+    │   ├── c_api.cpp
+    │   └── main.cpp
+    ├── tests/
+    ├── vendor/blake3/
+    ├── CMakeLists.txt
+    └── BUILD.md
 ```
