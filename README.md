@@ -22,7 +22,7 @@ fpm install firefox
   M5 fpm-installer  ── Extract DATA/, run hooks, write file manifest
        │  calls trx.commit() on success, trx.abort() on error
        ▼
-  M8 fpm-db         ── (planned) SQLite record of installed packages
+  M8 fpm-db         ── SQLite record of installed packages, files, generations, repos
 ```
 
 ## Module Status
@@ -36,9 +36,9 @@ fpm install firefox
 | **M5 fpm-installer** | Rust | ✅ implemented | Extract DATA/, hooks, file manifest, conflict detection, remove |
 | **M6 fpm-index** | Rust | planned | Repo index sync (delta, ETag, MessagePack) |
 | **M7 fpm-hooks** | Rust/Shell | planned | Pre/post-install script runner, sandboxed via bwrap |
-| **M8 fpm-db** | Rust + SQLite | planned | Installed packages, files, generations, holds |
+| **M8 fpm-db** | Rust + SQLite | ✅ implemented | Installed packages, files, generations, repos, holds, connection pool |
 | **M9 fpm-compat** | Python/Rust | planned | .deb / .rpm / .apk → .fpkg conversion |
-| **M10 fpm-builder** | Rust/Shell | planned | Build from PKGBUILD.toml |
+| **M10 fpm-builder** | Rust | ✅ implemented | Build from PKGBUILD.toml → .fpkg |
 | **M11 fpm-sandbox** | C/Rust | planned | User-namespace overlay, seccomp |
 | **M12 fconv** | Python | planned | Standalone format converter CLI |
 
@@ -184,7 +184,7 @@ Rust library + CLI. The final step before `trx.commit()`. Receives a `Transactio
 ### Install pipeline per package
 
 ```
- 1. run pre-install hook  (META/scripts/pre-install.sh → staged at var/lib/fpm/hooks/)
+ 1. run pre-install hook  (META/scripts/pre-install.sh)
  2. extract_data()        (tar.zst DATA/ → trx.root_dir(), streaming BLAKE3 per file)
  3. conflict check        (file ownership map across all packages in the plan)
  4. run_layout_fixups()   (ldconfig conf, .desktop entries)
@@ -204,7 +204,6 @@ Every installed package leaves a manifest at:
   { "path": "usr/share/applications/firefox.desktop", "blake3": "...", "size": 812, "type": "file" }
 ]
 ```
-This manifest is the source of truth for `fpm remove` and M8 Database.
 
 ### Security
 
@@ -217,10 +216,9 @@ This manifest is the source of truth for `fpm remove` and M8 Database.
 ```rust
 use fpm_installer::installer::Installer;
 
-let installer = Installer::new();              // hooks + conflict check enabled
+let installer = Installer::new();
 let result = installer.install_plan(&trx, &plan)?;
-// result.total_files(), result.total_bytes()
-let gen_id = trx.commit()?;                   // atomically promote pending/
+let gen_id = trx.commit()?;
 ```
 
 ### Remove
@@ -229,22 +227,55 @@ let gen_id = trx.commit()?;                   // atomically promote pending/
 use fpm_installer::remove::Remover;
 
 let remover = Remover::new_system();
-remover.remove("firefox", "125.0.3")?;        // reads manifest, deletes files
+remover.remove("firefox", "125.0.3")?;
 ```
 
 ### CLI
 
 ```sh
-fpm-installer extract  <fpkg> <dest>                     # extract DATA/ only
-fpm-installer remove   --name firefox --version 125.0.3  # remove package
-fpm-installer list     --root /                          # list installed
-fpm-installer manifest --name firefox --version 125.0.3  # show file manifest
+fpm-installer extract  <fpkg> <dest>
+fpm-installer remove   --name firefox --version 125.0.3
+fpm-installer list     --root /
+fpm-installer manifest --name firefox --version 125.0.3
 ```
 
-### Build & test
+---
+
+## M8 — Database (`fpm-db/`)
+
+Rust library + CLI. SQLite-backed store for installed packages, file ownership, generation history, repository list, and package holds. Used by `fpmd` and the `fpm` CLI after `trx.commit()`.
+
+### Database schema
+
+| Table | Purpose |
+|-------|---------|
+| `packages` | Installed package metadata (name, version, size, hashes, mode) |
+| `files` | Per-file ownership — enables `fpm owns <path>` queries |
+| `generations` | Transaction history for rollback |
+| `repos` | Configured package repositories (fpkg / apt / rpm / apk) |
+| `hold` | Version-pinned packages excluded from upgrades |
+
+### Connection pool
+
+Since `0.1.9`, `fpm-db` uses `r2d2` + `r2d2_sqlite` for a thread-safe connection pool. `open_pool()` / `open_pool_in_memory()` replace direct `rusqlite::Connection` in multi-threaded contexts (fpmd, concurrent CLI calls).
+
+### CLI
 
 ```sh
-cd fpm-installer && cargo test
+fpm-db init
+fpm-db stats
+fpm-db list [--mode system|user]
+fpm-db info <name>
+fpm-db search <query>
+fpm-db owns <path>
+fpm-db files <name>
+fpm-db generations
+fpm-db repos
+fpm-db repo-add --name archlinux --url https://repo.example.com --type fpkg
+fpm-db holds
+fpm-db hold-add <name> [--version <ver>]
+fpm-db register --manifest <path.json>
+fpm-db unregister --name <name> --version <ver>
 ```
 
 ---
@@ -271,24 +302,41 @@ pip install blake3 tomli-w
 ```
 fpkg/
 ├── fpkg                   # Python package inspector + creator CLI
-├── fpkg-build             # Python package builder
+├── fpkg-build             # Python package builder (superseded by M10 Rust rewrite)
 ├── fpm-solver/            # M1 — Rust, dependency resolution
 ├── fpm-verifier/          # M3 — C++20, cryptographic verification
 ├── fpm-fetcher/           # M2 — Rust async, package downloader
 ├── fpm-core/              # M4 — Rust, transaction manager
 │   └── src/{lib,error,paths,generation,plan,trx}.rs
-└── fpm-installer/         # M5 — Rust, package installer + remover
+├── fpm-installer/         # M5 — Rust, package installer + remover
+│   ├── src/
+│   │   ├── lib.rs
+│   │   ├── error.rs
+│   │   ├── extract.rs
+│   │   ├── layout.rs
+│   │   ├── manifest.rs
+│   │   ├── hooks.rs
+│   │   ├── installer.rs
+│   │   ├── remove.rs
+│   │   └── main.rs
+│   ├── tests/installer_tests.rs
+│   └── Cargo.toml
+└── fpm-db/                # M8 — Rust + SQLite, installed package database
     ├── src/
-    │   ├── lib.rs             # public API
-    │   ├── error.rs           # InstallerError
-    │   ├── extract.rs         # tar.zst DATA/ extractor, path-traversal guard
-    │   ├── layout.rs          # ldconfig, .desktop fixups
-    │   ├── manifest.rs        # PackageManifest (file ownership record)
-    │   ├── hooks.rs           # pre/post-install script runner
-    │   ├── installer.rs       # Installer orchestrator, conflict detection
-    │   ├── remove.rs          # Remover (reads manifest, deletes files)
-    │   └── main.rs            # CLI
-    ├── tests/installer_tests.rs   # 9 integration tests
+    │   ├── lib.rs
+    │   ├── error.rs
+    │   ├── schema.rs
+    │   ├── models.rs
+    │   ├── db.rs
+    │   ├── pool.rs
+    │   ├── packages.rs
+    │   ├── files.rs
+    │   ├── generations.rs
+    │   ├── generation_mgr.rs
+    │   ├── repos.rs
+    │   ├── hold.rs
+    │   └── main.rs
+    ├── tests/db_tests.rs
     └── Cargo.toml
 ```
 
@@ -300,11 +348,12 @@ cd fpm-verifier
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 
-# 2. Rust crates (order matters for dep links)
+# 2. Rust crates (order matters for FFI links)
 cd ../fpm-solver    && cargo build --release
 cd ../fpm-fetcher   && cargo build --release
 cd ../fpm-core      && cargo build --release
 cd ../fpm-installer && cargo build --release
+cd ../fpm-db        && cargo build --release
 
 # 3. Tests
 cd ../fpm-verifier  && ctest --test-dir build --output-on-failure
@@ -312,4 +361,5 @@ cd ../fpm-solver    && cargo test
 cd ../fpm-fetcher   && cargo test
 cd ../fpm-core      && cargo test
 cd ../fpm-installer && cargo test
+cd ../fpm-db        && cargo test
 ```
