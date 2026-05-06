@@ -1,0 +1,32 @@
+[package]
+name = "fpm-installer"
+version = "0.1.0"
+edition = "2021"
+description = "fpm M5 Installer: unpack .fpkg DATA/, run hooks, file manifest"
+
+[lib]
+name = "fpm_installer"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fpm-installer"
+path = "src/main.rs"
+
+[dependencies]
+# M4 types: Transaction, InstallPlan, PlanEntry, FpmPaths
+fpm-core    = { path = "../fpm-core" }
+
+serde           = { version = "1", features = ["derive"] }
+serde_json      = "1"
+thiserror       = "1"
+anyhow          = "1"
+tar             = "0.4"
+zstd            = "0.13"
+blake3          = "1"
+hex             = "0.4"
+tracing         = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+walkdir         = "2"
+
+[dev-dependencies]
+tempfile = "3"
