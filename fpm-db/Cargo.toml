@@ -1,0 +1,29 @@
+[package]
+name = "fpm-db"
+version = "0.1.0"
+edition = "2021"
+description = "fpm M8 Database: SQLite store for packages, files, generations, holds"
+
+[lib]
+name = "fpm_db"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fpm-db"
+path = "src/main.rs"
+
+[dependencies]
+fpm-core      = { path = "../fpm-core" }
+fpm-installer = { path = "../fpm-installer" }
+
+rusqlite      = { version = "0.31", features = ["bundled"] }
+serde         = { version = "1", features = ["derive"] }
+serde_json    = "1"
+thiserror     = "1"
+anyhow        = "1"
+chrono        = { version = "0.4", features = ["serde"] }
+tracing       = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"
