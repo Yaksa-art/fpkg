@@ -13,8 +13,8 @@ name = "fpm-installer"
 path = "src/main.rs"
 
 [dependencies]
-# M4 types: Transaction, InstallPlan, PlanEntry, FpmPaths
-fpm-core    = { path = "../fpm-core" }
+fpm-core   = { path = "../fpm-core" }
+fpm-hooks  = { path = "../fpm-hooks" }
 
 serde           = { version = "1", features = ["derive"] }
 serde_json      = "1"

@@ -1,107 +1,45 @@
-//! Pre/post-install script runner.
-//!
-//! Scripts live inside the *extracted staging root* at:
-//!   <root>/var/lib/fpm/hooks/<name>-<version>/pre-install.sh
-//!   <root>/var/lib/fpm/hooks/<name>-<version>/post-install.sh
-//!
-//! They are copied there by `extract_data()` from META/scripts/ during extraction.
-//!
-//! Execution environment:
-//!   - Runs as the current user (root for system installs)
-//!   - CWD = staging root
-//!   - Timeout: 60 s by default
-//!   - FPKG_ROOT   = staging root path
-//!   - FPKG_NAME   = package name
-//!   - FPKG_VERSION= package version
-//!
-//! In a future M7 (Hooks), scripts will be sandboxed via bwrap/seccomp.
-//! For now they run in a plain child process.
-
-use std::{
-    path::Path,
-    process::{Command, Stdio},
-    time::Duration,
+use std::path::Path;
+use fpm_hooks::{
+    runner::{HookKind, Runner, RunnerConfig},
+    HookError,
 };
 use crate::error::InstallerError;
 
-pub const DEFAULT_TIMEOUT_SECS: u64 = 60;
-
-/// Run pre-install script if present.
-pub fn run_pre_install(
-    root: &Path,
-    name: &str,
-    version: &str,
-) -> Result<(), InstallerError> {
-    run_hook(root, name, version, "pre-install.sh")
+fn runner() -> Runner {
+    Runner::new(RunnerConfig::default())
 }
 
-/// Run post-install script if present.
-pub fn run_post_install(
-    root: &Path,
-    name: &str,
-    version: &str,
-) -> Result<(), InstallerError> {
-    run_hook(root, name, version, "post-install.sh")
+pub fn run_pre_install(root: &Path, name: &str, version: &str) -> Result<(), InstallerError> {
+    run(root, name, version, HookKind::PreInstall)
 }
 
-fn run_hook(
-    root: &Path,
-    name: &str,
-    version: &str,
-    script_name: &str,
-) -> Result<(), InstallerError> {
-    let script_path = root
-        .join("var/lib/fpm/hooks")
-        .join(format!("{}-{}", name, version))
-        .join(script_name);
+pub fn run_post_install(root: &Path, name: &str, version: &str) -> Result<(), InstallerError> {
+    run(root, name, version, HookKind::PostInstall)
+}
 
-    if !script_path.exists() {
-        return Ok(()); // no hook — fine
-    }
+pub fn run_pre_remove(root: &Path, name: &str, version: &str) -> Result<(), InstallerError> {
+    run(root, name, version, HookKind::PreRemove)
+}
 
-    tracing::info!("Running hook: {}", script_path.display());
+pub fn run_post_remove(root: &Path, name: &str, version: &str) -> Result<(), InstallerError> {
+    run(root, name, version, HookKind::PostRemove)
+}
 
-    // Make executable
-    use std::os::unix::fs::PermissionsExt;
-    let mut perms = std::fs::metadata(&script_path)?.permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&script_path, perms)?;
-
-    let mut child = Command::new("/bin/sh")
-        .arg(&script_path)
-        .env("FPKG_ROOT", root)
-        .env("FPKG_NAME", name)
-        .env("FPKG_VERSION", version)
-        .current_dir(root)
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .spawn()?;
-
-    // Manual timeout loop (no nix/tokio dependency)
-    let timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECS);
-    let start = std::time::Instant::now();
-    loop {
-        match child.try_wait()? {
-            Some(status) => {
-                if !status.success() {
-                    let code = status.code().unwrap_or(-1);
-                    return Err(InstallerError::ScriptFailed {
-                        script: script_name.to_string(),
-                        code,
-                    });
-                }
-                return Ok(());
+fn run(root: &Path, name: &str, version: &str, kind: HookKind) -> Result<(), InstallerError> {
+    runner()
+        .run(root, name, version, kind)
+        .map_err(|e| match e {
+            HookError::ScriptFailed { script, code, .. } => {
+                InstallerError::ScriptFailed { script, code }
             }
-            None => {
-                if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    return Err(InstallerError::ScriptTimeout {
-                        script: script_name.to_string(),
-                        secs: DEFAULT_TIMEOUT_SECS,
-                    });
-                }
-                std::thread::sleep(Duration::from_millis(100));
+            HookError::Timeout { script, secs } => {
+                InstallerError::ScriptTimeout { script, secs }
             }
-        }
-    }
+            HookError::Io(io) => InstallerError::Io(io),
+            other => InstallerError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                other.to_string(),
+            )),
+        })?;
+    Ok(())
 }
