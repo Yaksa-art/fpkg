@@ -1,0 +1,33 @@
+[package]
+name = "fpm-index"
+version = "0.1.0"
+edition = "2021"
+description = "M6 Index — repo index sync (delta, ETag, MessagePack) for fpm"
+
+[lib]
+name = "fpm_index"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fpm-index"
+path = "src/main.rs"
+
+[dependencies]
+fpm-solver  = { path = "../fpm-solver" }
+fpm-db      = { path = "../fpm-db" }
+
+tokio       = { version = "1", features = ["full"] }
+reqwest     = { version = "0.12", features = ["stream", "rustls-tls"] }
+rmp-serde   = "1"
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+thiserror   = "1"
+anyhow      = "1"
+chrono      = { version = "0.4", features = ["serde"] }
+tracing     = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+wiremock  = "0.6"
+tokio     = { version = "1", features = ["full", "test-util"] }
+tempfile  = "3"
