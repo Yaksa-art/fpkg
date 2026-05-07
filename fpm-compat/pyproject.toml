@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "fpm-compat"
+version = "0.1.0"
+description = "M9 fpm-compat: convert .deb/.rpm/.apk packages to .fpkg"
+requires-python = ">=3.11"
+dependencies = [
+    "tomli-w>=1.0",
+]
+
+[project.scripts]
+"fpm-compat" = "fpm_compat.__main__:main"
+
+[tool.setuptools.packages.find]
+where = [".."]
+include = ["fpm_compat*", "fpkg_lib*"]
