@@ -1,0 +1,30 @@
+[package]
+name = "fpm-sandbox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "M11 Sandbox: user-namespace overlay manager for fpm"
+
+[[bin]]
+name = "fpm-sandbox"
+path = "src/main.rs"
+
+[lib]
+name = "fpm_sandbox"
+path = "src/lib.rs"
+
+[dependencies]
+fpm-core      = { path = "../fpm-core" }
+anyhow.workspace = true
+thiserror.workspace = true
+serde         = { workspace = true }
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+tempfile.workspace = true
+libc          = "0.2"
+nix           = { version = "0.27", features = ["mount", "sched", "user"] }
+
+[dev-dependencies]
+tempfile.workspace = true
