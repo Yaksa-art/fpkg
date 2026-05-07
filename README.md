@@ -1,361 +1,146 @@
-# fpkg — FSociety Package Manager
+<div align="center">
+  <img width="1080" height="589" alt="FSociety Package Manager" src="https://github.com/user-attachments/assets/fd7cacad-77d5-4c2b-b2c0-bc9a576ec347" />
 
-Native package format, cryptographic verification, dependency resolution, async downloading and build tooling for FSocietyOS.
+  <h1>fpm — FSociety Package Manager</h1>
 
-## Module Pipeline
+  <p>
+    <a href="https://github.com/Yaksa-art/fpkg"><img src="https://sloc.xyz/github/Yaksa-art/fpkg/?category=code" alt="Code"></a>
+    <a href="https://github.com/Yaksa-art/fpkg/"><img src="https://sloc.xyz/github/Yaksa-art/fpkg/?category=lines" alt="Lines"></a>
+    <a href="https://www.gnu.org/licenses/gpl-3.0"><img src="https://img.shields.io/badge/License-GPL%203.0-blue.svg?style=flat-square" alt="License"></a>
+    <a href="https://github.com/Yaksa-art/fpkg/issues"><img src="https://img.shields.io/github/issues/Yaksa-art/fpkg?style=flat-square&logo=github" alt="Issues"></a>
+  </p>
 
-```
-fpm install firefox
-       │
-       ▼
-  M1 fpm-solver     ── Resolve dependency graph (pubgrub SAT)
-       │  returns Vec<ResolvedPackage>
-       ▼
-  M2 fpm-fetcher    ── Download .fpkg files (async/tokio, parallel, resume)
-       │  calls ▼ after each download
-  M3 fpm-verifier   ── Ed25519 + BLAKE3 Merkle + checksums + PKI chain (C++20 via FFI)
-       │  returns Vec<FetchResult> with verified paths
-       ▼
-  M4 fpm-core/trx   ── Atomic generation snapshot, trx.begin()
-       │  Transaction handle (root_dir, plan)
-       ▼
-  M5 fpm-installer  ── Extract DATA/, run hooks, write file manifest
-       │  calls trx.commit() on success, trx.abort() on error
-       ▼
-  M8 fpm-db         ── SQLite record of installed packages, files, generations, repos
-```
-
-## Module Status
-
-| Module | Language | Status | Responsibility |
-|--------|----------|--------|----------------|
-| **M1 fpm-solver** | Rust | ✅ implemented | Dependency resolution, conflict reporting, virtual-package aliases |
-| **M2 fpm-fetcher** | Rust | ✅ implemented | Async download, parallel, HTTP Range resume, mirror failover, M3 FFI call |
-| **M3 fpm-verifier** | C++20 | ✅ implemented | Ed25519, BLAKE3 Merkle tree, per-file checksums, PKI chain |
-| **M4 fpm-core (trx)** | Rust | ✅ implemented | Atomic CoW generation snapshot, rollback, install plan |
-| **M5 fpm-installer** | Rust | ✅ implemented | Extract DATA/, hooks, file manifest, conflict detection, remove |
-| **M6 fpm-index** | Rust | planned | Repo index sync (delta, ETag, MessagePack) |
-| **M7 fpm-hooks** | Rust/Shell | planned | Pre/post-install script runner, sandboxed via bwrap |
-| **M8 fpm-db** | Rust + SQLite | ✅ implemented | Installed packages, files, generations, repos, holds, connection pool |
-| **M9 fpm-compat** | Python/Rust | planned | .deb / .rpm / .apk → .fpkg conversion |
-| **M10 fpm-builder** | Rust | ✅ implemented | Build from PKGBUILD.toml → .fpkg |
-| **M11 fpm-sandbox** | C/Rust | planned | User-namespace overlay, seccomp |
-| **M12 fconv** | Python | planned | Standalone format converter CLI |
-
-The `fpkg` Python CLI (root of this repo) provides package inspection, verification, and creation for the `.fpkg` archive format.
+  <p><b>The foundational package manager for FSocietyOS. Built from scratch for atomicity, cryptographic security, and dual-mode (system/user) operations.</b></p>
+</div>
 
 ---
 
-## .fpkg Archive Format
+## 📖 Core Philosophy
 
-A `.fpkg` file is a `tar.zst` archive with the following layout:
+`fpm` is not just a utility; it is the core of FSocietyOS's independence. We looked at APT, DNF, Pacman, and APK, and built a system that solves their historical flaws without relying on heavy containerization like Flatpak.
 
-```
-package.fpkg  (tar.zst)
+* **🛡️ Secure by Default:** Every package, file, and index is cryptographically verified (Ed25519 signatures, BLAKE3 Merkle trees, and checksums).
+* **⚛️ Atomic Transactions:** Installations either complete fully or not at all. Aborted updates will never leave your system in a broken state. `fpm rollback` is supported natively.
+* **👥 Dual-Mode (System & User):** Run as `root` for global installs (`/usr`), or safely as a normal user (`~/.local/fpm`) with user-namespace overlay isolation.
+* **📦 Content Addressing:** Files are identified by their BLAKE3 content hash.
+* **⚡ Blazing Fast:** Async parallel downloading, PubGrub SAT dependency resolution, HTTP ETag caching, and MessagePack-based binary indexes.
+* **🔗 Universal Compatibility:** Native `.fpkg` format, but features an integrated compatibility layer to convert and install `.deb`, `.rpm`, `.apk`, and `.pkg.tar.zst` seamlessly.
+
+---
+
+<img width="1328" height="744" alt="Untitled" src="https://github.com/user-attachments/assets/6d00cb84-5971-4b80-8119-1036edc991d6" />
+
+
+### Module Status
+
+All foundational modules are actively implemented in Rust (with C++20 for cryptography).
+
+| Module | Component | Lang | Status | Responsibility |
+|---|---|---|---|---|
+| **M1** | `fpm-solver` | Rust | ✅ | Dependency resolution (PubGrub SAT), conflicts, virtual packages |
+| **M2** | `fpm-fetcher` | Rust | ✅ | Async parallel download, HTTP Range resume, ETag caching |
+| **M3** | `fpm-verifier`| C++20 | ✅ | Ed25519 signatures, BLAKE3 Merkle trees, PKI validation |
+| **M4** | `fpm-core` | Rust | ✅ | Atomic CoW generation snapshots, Rollbacks, Transaction state |
+| **M5** | `fpm-installer`| Rust | ✅ | Extract `DATA/`, layout fixups, file manifests, conflicts |
+| **M6** | `fpm-index` | Rust | ✅ | Repo index sync (delta, ETag, MessagePack) |
+| **M7** | `fpm-hooks` | Rust | ✅ | Pre/post-install script runner, timeouts |
+| **M8** | `fpm-db` | Rust | ✅ | SQLite state (packages, files, generations, holds, r2d2 pool) |
+| **M9** | `fpm-compat` | Rust | ✅ | Convert foreign formats (`.deb`, `.rpm`, `.apk`, Arch `.zst`) |
+| **M10**| `fpkg-build` | Rust | ✅ | Build `.fpkg` archives from `PKGBUILD.toml` |
+| **M11**| `fpm-sandbox` | Rust | ✅ | User-namespace overlay, `bwrap`, isolation for user-mode |
+| **Daemon**| `fpmd` | Rust | ✅ | JSON-RPC 2.0 orchestrator over Unix sockets |
+
+---
+
+## 📦 The `.fpkg` Archive Format
+
+A `.fpkg` file is a `tar.zst` (Zstandard compressed tarball) structured to allow arbitrary file extraction and immediate cryptographic validation.
+
+```text
+package.fpkg
 ├── META/
-│   ├── manifest.toml        # package name, version, deps, flags
-│   ├── checksums.blake3     # "<blake3-hex>  <rel-path>" per DATA/ file
-│   ├── content_tree.txt     # single line: BLAKE3 Merkle root of DATA/
-│   ├── signature.ed25519    # Ed25519 detached sig over manifest.toml (64 bytes raw)
+│   ├── manifest.toml        # Package name, version, architecture, dependencies
+│   ├── signature.ed25519    # Detached Ed25519 signature of manifest.toml
+│   ├── checksums.blake3     # "<blake3-hex>  <rel-path>" for every file
+│   ├── content_tree.txt     # BLAKE3 Merkle root of the DATA/ directory
+│   ├── dependencies.toml    # Detailed dependency graph
 │   └── scripts/
-│       ├── pre-install.sh
-│       └── post-install.sh
-└── DATA/                    # installed files, mirrors filesystem root
-    └── usr/bin/...
+│       ├── pre-install.sh   # Run before extraction (sandboxed)
+│       └── post-install.sh  # Run after extraction (sandboxed)
+├── DATA/                    # Actual installed files
+│   ├── usr/bin/...
+│   └── etc/...
+└── COMPAT/                  # (Optional) Retained metadata from converted packages
+    └── origin_format.txt    # "native", "deb", "rpm", "apk", etc.
 ```
 
 ---
 
-## M1 — Dependency Solver (`fpm-solver/`)
+## 👥 Dual-Mode: System vs. User Installations
 
-Rust library + CLI. Consumes `manifest.toml` and a package index, returns a `Vec<ResolvedPackage>` — the exact install set with resolved versions.
+`fpm` is designed from day one to operate without requiring `root` for isolated application installs. 
 
-### Features
+### System Mode (`sudo fpm install`)
+* **Files:** Installed globally (`/usr`, `/etc`, `/var`).
+* **Database:** `/var/lib/fpm/db.sqlite`
+* **Target:** Core OS packages, drivers, global utilities.
 
-- Parses `manifest.toml` — string deps (`"libfoo >= 1.2.0"`) and table form
-- `provides` virtual names (`libc` → `glibc` or `musl`)
-- `conflicts` declarations with human-readable conflict reports (via `pubgrub`)
-- Optional deps excluded from resolution unless explicitly requested
+### User Mode (`fpm install --user`)
+* **Files:** Installed in `~/.local/fpm/packages/<name>/` and symlinked to `~/.local/bin/`.
+* **Database:** `~/.local/share/fpm/db.sqlite`
+* **Sandbox (M11):** Configurable isolation (None, Overlay, Bubblewrap, Full Container).
+* **Target:** User applications, IDEs, web browsers, safely contained.
 
-### Build & use
+If a package exists in both scopes, the User version takes priority via the `$PATH` environment variable.
+
+---
+
+## ⚙️ Modules Deep Dive
+
+* **M1 Solver**: Uses the PubGrub algorithm (same as Dart/Cargo) ensuring fast, conflict-aware resolution without the historical slowdowns of `apt`'s SAT solver.
+* **M3 Verifier (C++20)**: Rebuilds a Merkle tree from the `DATA/` directory on-the-fly and compares it against `META/content_tree.txt` signed by the maintainer's Ed25519 key. Fast, using SIMD-accelerated BLAKE3.
+* **M4 Transaction Manager**: Creates atomic "Generations". Every install/remove acts on a `pending/` snapshot, effectively enabling `fpm rollback --to <gen>` if an update breaks your system.
+* **M8 Database**: Maintains strict file-level ownership in a local SQLite DB, enabling instant queries like `fpm-db owns /usr/bin/firefox`.
+* **M9 Compat Layer**: Transparently handles foreign packages. Run `fconv package.deb` and fpm translates the Debian `control` file into a `manifest.toml`, remaps dependencies via a compatibility dictionary, and outputs a clean `.fpkg`.
+* **M11 Sandbox**: Wraps hook scripts and user-mode installs in namespaces using `bwrap` and `fuse-overlayfs` to prevent malicious scripts from modifying the host during installation.
+
+---
+
+## 🛠️ Additional Tools
+
+Included in this repository are standalone developer tools:
+
+* **`fconv`**: Converts `.deb`, `.rpm`, `.apk`, and Arch `.pkg.tar.zst` packages into `.fpkg`.
+* **`fpkg-build`**: Compiles source code into a `.fpkg` by reading a declarative `PKGBUILD.toml` file.
+* **`fpkg-sign`**: Key generation and signing utility for repository maintainers.
+* **`fpmd`**: The background daemon. Listens on `/run/fpm/fpmd.sock` (or `/run/user/<uid>/fpm/fpmd.sock`) to coordinate all M1-M11 operations asynchronously.
+
+---
+
+## 🏗️ Building from Source
+
+Ensure you have CMake 3.20+, a C++20 compiler (GCC/Clang), Rust (Cargo), and `libsodium` installed.
 
 ```sh
-cd fpm-solver && cargo build --release
-
-fpm-solver resolve --manifest ./manifest.toml --index ./repo/index
-fpm-solver check   --manifest ./manifest.toml
-```
-
----
-
-## M2 — Fetcher (`fpm-fetcher/`)
-
-Rust async library + CLI. Receives `Vec<ResolvedPackage>` from M1, downloads `.fpkg` files from configured mirrors in parallel, then calls **M3 Verifier via C FFI** on each downloaded archive.
-
-### Features
-
-| Feature | Detail |
-|---------|--------|
-| Parallel downloads | Bounded by `parallel_downloads` (default 4), tokio `Semaphore` |
-| HTTP Range resume | `.part` files survive interruptions |
-| Mirror failover | Mirrors ranked by latency; next mirror tried on error |
-| ETag caching | 304 avoids re-download of unchanged packages |
-| M3 FFI call | `fpm_verify_package()` called after each download |
-| Progress events | `mpsc::Sender<ProgressEvent>` — JSON-serialisable |
-
-### Build
-
-```sh
-cd ../fpm-verifier && cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j$(nproc)
-cd ../fpm-fetcher  && cargo build --release
-```
-
----
-
-## M3 — Verifier (`fpm-verifier/`)
-
-C++20 static library (`libfpm_verifier.a`) + CLI. Called by M2 via FFI after each download.
-
-### Verification pipeline
-
-1. **Ed25519** — `META/signature.ed25519` verified over `manifest.toml`
-2. **Per-file checksums** — every `DATA/` file vs `META/checksums.blake3`
-3. **Merkle root** — BLAKE3 tree rebuilt from `DATA/`
-4. **PKI chain** (optional) — package pubkey vs repo root key
-
-### Build
-
-```sh
-cd fpm-verifier
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j$(nproc)
-```
-
-### FFI error codes
-
-| Code | Constant | Meaning |
-|------|----------|---------|
-| 0 | `FPM_OK` | Success |
-| 1 | `FPM_ERR_SIGNATURE` | Ed25519 verification failed |
-| 2 | `FPM_ERR_MERKLE` | Merkle root mismatch |
-| 3 | `FPM_ERR_CHECKSUM` | Per-file checksum mismatch |
-| 4 | `FPM_ERR_PKI` | PKI chain verification failed |
-| 5 | `FPM_ERR_IO` | File I/O error |
-| 6 | `FPM_ERR_INVALID_INPUT` | Wrong key/signature length |
-
----
-
-## M4 — Transaction Manager (`fpm-core/`)
-
-Rust library. Manages **atomic generation snapshots** so every install, remove, or upgrade can be rolled back.
-
-### Generation model
-
-```
-/var/lib/fpm/
-├── generations/
-│   ├── 1/  meta.json  root/
-│   ├── 2/  meta.json  root/
-│   └── 3/  meta.json  root/   ← rollback to 1
-├── current -> 3               ← symlink, updated atomically
-├── pending/                   ← staging area (M5 writes here)
-│   └── root/
-└── db.sqlite
-```
-
-### API
-
-```rust
-let mgr = TransactionManager::new_system();
-let mut trx = mgr.begin("install firefox 125.0.3")?;
-trx.set_plan(plan);
-// M5 installs into trx.root_dir()
-let gen_id = trx.commit()?;
-mgr.rollback(1)?;
-mgr.prune(10)?;
-```
-
----
-
-## M5 — Installer (`fpm-installer/`)
-
-Rust library + CLI. The final step before `trx.commit()`. Receives a `Transaction` handle from M4 and the `InstallPlan`, physically unpacks each `.fpkg` and wires everything together.
-
-### Install pipeline per package
-
-```
- 1. run pre-install hook  (META/scripts/pre-install.sh)
- 2. extract_data()        (tar.zst DATA/ → trx.root_dir(), streaming BLAKE3 per file)
- 3. conflict check        (file ownership map across all packages in the plan)
- 4. run_layout_fixups()   (ldconfig conf, .desktop entries)
- 5. PackageManifest.save()(var/lib/fpm/manifests/<name>-<ver>.json)
- 6. run post-install hook
-```
-
-### File manifest
-
-Every installed package leaves a manifest at:
-```
-<root>/var/lib/fpm/manifests/<name>-<version>.json
-```
-```json
-[
-  { "path": "usr/bin/firefox",  "blake3": "abc...", "size": 265144, "type": "file" },
-  { "path": "usr/share/applications/firefox.desktop", "blake3": "...", "size": 812, "type": "file" }
-]
-```
-
-### Security
-
-- Path-traversal guard: rejects any `DATA/` entry containing `..` components
-- Conflict detection: two packages claiming the same file → `InstallerError::FileConflict`
-- Hooks run in a plain child process with 60 s timeout; M7 will sandbox them via bwrap
-
-### API
-
-```rust
-use fpm_installer::installer::Installer;
-
-let installer = Installer::new();
-let result = installer.install_plan(&trx, &plan)?;
-let gen_id = trx.commit()?;
-```
-
-### Remove
-
-```rust
-use fpm_installer::remove::Remover;
-
-let remover = Remover::new_system();
-remover.remove("firefox", "125.0.3")?;
-```
-
-### CLI
-
-```sh
-fpm-installer extract  <fpkg> <dest>
-fpm-installer remove   --name firefox --version 125.0.3
-fpm-installer list     --root /
-fpm-installer manifest --name firefox --version 125.0.3
-```
-
----
-
-## M8 — Database (`fpm-db/`)
-
-Rust library + CLI. SQLite-backed store for installed packages, file ownership, generation history, repository list, and package holds. Used by `fpmd` and the `fpm` CLI after `trx.commit()`.
-
-### Database schema
-
-| Table | Purpose |
-|-------|---------|
-| `packages` | Installed package metadata (name, version, size, hashes, mode) |
-| `files` | Per-file ownership — enables `fpm owns <path>` queries |
-| `generations` | Transaction history for rollback |
-| `repos` | Configured package repositories (fpkg / apt / rpm / apk) |
-| `hold` | Version-pinned packages excluded from upgrades |
-
-### Connection pool
-
-Since `0.1.9`, `fpm-db` uses `r2d2` + `r2d2_sqlite` for a thread-safe connection pool. `open_pool()` / `open_pool_in_memory()` replace direct `rusqlite::Connection` in multi-threaded contexts (fpmd, concurrent CLI calls).
-
-### CLI
-
-```sh
-fpm-db init
-fpm-db stats
-fpm-db list [--mode system|user]
-fpm-db info <name>
-fpm-db search <query>
-fpm-db owns <path>
-fpm-db files <name>
-fpm-db generations
-fpm-db repos
-fpm-db repo-add --name archlinux --url https://repo.example.com --type fpkg
-fpm-db holds
-fpm-db hold-add <name> [--version <ver>]
-fpm-db register --manifest <path.json>
-fpm-db unregister --name <name> --version <ver>
-```
-
----
-
-## fpkg — Package Inspector CLI
-
-Python 3.11+ tool for inspecting, verifying, and creating `.fpkg` files.
-
-```sh
-pip install blake3 tomli-w
-
-./fpkg info     package.fpkg
-./fpkg verify   package.fpkg
-./fpkg inspect  package.fpkg
-./fpkg manifest package.fpkg
-./fpkg extract  package.fpkg --dest .
-./fpkg create   --name myapp --version 1.0.0 --data ./dist --output myapp.fpkg
-```
-
----
-
-## Repository layout
-
-```
-fpkg/
-├── fpkg                   # Python package inspector + creator CLI
-├── fpkg-build             # Python package builder (superseded by M10 Rust rewrite)
-├── fpm-solver/            # M1 — Rust, dependency resolution
-├── fpm-verifier/          # M3 — C++20, cryptographic verification
-├── fpm-fetcher/           # M2 — Rust async, package downloader
-├── fpm-core/              # M4 — Rust, transaction manager
-│   └── src/{lib,error,paths,generation,plan,trx}.rs
-├── fpm-installer/         # M5 — Rust, package installer + remover
-│   ├── src/
-│   │   ├── lib.rs
-│   │   ├── error.rs
-│   │   ├── extract.rs
-│   │   ├── layout.rs
-│   │   ├── manifest.rs
-│   │   ├── hooks.rs
-│   │   ├── installer.rs
-│   │   ├── remove.rs
-│   │   └── main.rs
-│   ├── tests/installer_tests.rs
-│   └── Cargo.toml
-└── fpm-db/                # M8 — Rust + SQLite, installed package database
-    ├── src/
-    │   ├── lib.rs
-    │   ├── error.rs
-    │   ├── schema.rs
-    │   ├── models.rs
-    │   ├── db.rs
-    │   ├── pool.rs
-    │   ├── packages.rs
-    │   ├── files.rs
-    │   ├── generations.rs
-    │   ├── generation_mgr.rs
-    │   ├── repos.rs
-    │   ├── hold.rs
-    │   └── main.rs
-    ├── tests/db_tests.rs
-    └── Cargo.toml
-```
-
-## Building everything
-
-```sh
-# 1. M3 Verifier (C++)
+# 1. Build M3 Verifier (C++ Static Library)
 cd fpm-verifier
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 
-# 2. Rust crates (order matters for FFI links)
+# 2. Build Rust crates (order matters for FFI linking)
 cd ../fpm-solver    && cargo build --release
 cd ../fpm-fetcher   && cargo build --release
 cd ../fpm-core      && cargo build --release
 cd ../fpm-installer && cargo build --release
 cd ../fpm-db        && cargo build --release
+cd ../fpm-index     && cargo build --release
+cd ../fpm-sandbox   && cargo build --release
+cd ../fpm-hooks     && cargo build --release
+cd ../fpm-compat    && cargo build --release
+cd ../fpkg-build    && cargo build --release
+cd ../fpmd          && cargo build --release
 
-# 3. Tests
+# 3. Run Test Suites
 cd ../fpm-verifier  && ctest --test-dir build --output-on-failure
 cd ../fpm-solver    && cargo test
 cd ../fpm-fetcher   && cargo test
