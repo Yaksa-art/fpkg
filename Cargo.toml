@@ -12,6 +12,7 @@ members = [
     "fpm-sandbox",
     "fpm-solver",
     "fpm-verifier",
+    "fpkg-build",
 ]
 
 [workspace.package]

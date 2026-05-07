@@ -1,0 +1,33 @@
+[package]
+name = "fpkg-build"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "M10 Builder: PKGBUILD.toml -> .fpkg package"
+
+[[bin]]
+name = "fpkg-build"
+path = "src/main.rs"
+
+[lib]
+name = "fpkg_build"
+path = "src/lib.rs"
+
+[dependencies]
+fpm-core            = { path = "../fpm-core" }
+fpm-sandbox         = { path = "../fpm-sandbox" }
+anyhow.workspace    = true
+thiserror.workspace = true
+serde               = { workspace = true }
+toml.workspace      = true
+chrono.workspace    = true
+blake3.workspace    = true
+walkdir.workspace   = true
+zip                 = { workspace = true }
+tracing.workspace   = true
+tracing-subscriber.workspace = true
+clap.workspace      = true
+tempfile.workspace  = true
+
+[dev-dependencies]
+tempfile.workspace  = true
