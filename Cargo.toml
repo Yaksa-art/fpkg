@@ -2,12 +2,14 @@
 resolver = "2"
 
 members = [
+    "fpm-compat",
     "fpm-core",
     "fpm-db",
     "fpm-fetcher",
     "fpm-hooks",
     "fpm-index",
     "fpm-installer",
+    "fpm-sandbox",
     "fpm-solver",
     "fpm-verifier",
 ]

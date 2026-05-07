@@ -1,0 +1,36 @@
+[package]
+name = "fpm-compat"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "M9 Compat Layer: convert .deb/.rpm/.apk/.pkg.tar.zst to .fpkg"
+
+[[bin]]
+name = "fconv"
+path = "src/main.rs"
+
+[lib]
+name = "fpm_compat"
+path = "src/lib.rs"
+
+[dependencies]
+fpm-core            = { path = "../fpm-core" }
+anyhow.workspace    = true
+thiserror.workspace = true
+serde               = { workspace = true }
+toml.workspace      = true
+tracing.workspace   = true
+tracing-subscriber.workspace = true
+clap.workspace      = true
+blake3.workspace    = true
+walkdir.workspace   = true
+zip                 = { workspace = true }
+flate2              = "1"
+bzip2               = "0.4"
+zstd                = "0.13"
+ar                  = "0.9"
+tar                 = "0.4"
+rpm                 = "0.14"
+
+[dev-dependencies]
+tempfile.workspace  = true
