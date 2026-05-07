@@ -13,6 +13,7 @@ members = [
     "fpm-solver",
     "fpm-verifier",
     "fpkg-build",
+    "fpmd",
 ]
 
 [workspace.package]
